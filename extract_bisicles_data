@@ -120,6 +120,66 @@ def arg_to_list(arg_in, in_type=None):
     # Return list of arguments:
     return arg_out
 
+def get_args():
+    """
+    Get program arguments
+    """
+    # Create argument parser:
+    arg_parser = argparse.ArgumentParser()
+    # Input data directory:
+    help_msg = 'Input data directory.'
+    arg_parser.add_argument('-i', '--indir', help=help_msg, default=None,
+                            required=True)
+    # Input file pattern to match:
+    help_msg = 'Input file pattern to match.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-p', '--inpattern', help=help_msg,
+                            default='*.hdf5')
+    # Query data information:
+    help_msg = 'Query and print data information (no extraction).'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-q', '--query', help=help_msg,
+                            action='store_true')
+    # Output directory:
+    help_msg = 'Output data directory.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-d', '--outdir', help=help_msg, default='.')
+    # Output file pattern / base name:
+    help_msg = 'Output file name pattern / basename.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-o', '--outpattern', help=help_msg, default='out')
+    # Disable NetCDF compression:
+    help_msg = 'Disable NetCDF compression.'
+    help_msg += ' DEFAULT : False'
+    arg_parser.add_argument('-z', '--nocompress', help=help_msg,
+                            action='store_false')
+    # NetCDF compression level:
+    help_msg = 'NetCDF compression level.'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-x', '--nccomplevel', help=help_msg, default=3,
+                            type=int)
+    # Levels to extract:
+    help_msg = 'Levels to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-l', '--levels', help=help_msg, default='all')
+    # Variables to extract:
+    help_msg = 'Variables to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-v', '--variables', help=help_msg, default='all')
+    # Time steps to extract:
+    help_msg = 'Time steps to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-t', '--times', help=help_msg, default='all')
+    # Multiprocessing pool size:
+    help_msg = 'Number of processes to run simultaneously.'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-n', '--numprocs', help=help_msg, default=4,
+                            type=int)
+    # Parse arguments:
+    args = arg_parser.parse_args()
+    # Return program arguments:
+    return args
+
 class DataCollection(object):
 
     """
@@ -561,66 +621,6 @@ class DataCollection(object):
         sys.stdout.write('\n\n')
         sys.stdout.flush()
 
-def get_args():
-    """
-    Get program arguments
-    """
-    # Create argument parser:
-    arg_parser = argparse.ArgumentParser()
-    # Input data directory:
-    help_msg = 'Input data directory.'
-    arg_parser.add_argument('-i', '--indir', help=help_msg, default=None,
-                            required=True)
-    # Query data information:
-    help_msg = 'Query and print data information (no extraction).'
-    help_msg += ' DEFAULT : %(default)s'
-    arg_parser.add_argument('-q', '--query', help=help_msg,
-                            action='store_true')
-    # Input file pattern to match:
-    help_msg = 'Input file pattern to match.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-p', '--inpattern', help=help_msg,
-                            default='*.hdf5')
-    # Output directory:
-    help_msg = 'Output data directory.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-d', '--outdir', help=help_msg, default='.')
-    # Output file pattern / base name:
-    help_msg = 'Output file name pattern / basename.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-o', '--outpattern', help=help_msg, default='out')
-    # Enable NetCDF compression:
-    help_msg = 'Disable NetCDF compression.'
-    help_msg += ' DEFAULT : False'
-    arg_parser.add_argument('-z', '--nccompress', help=help_msg,
-                            action='store_false')
-    # NetCDF compression level:
-    help_msg = 'NetCDF compression level.'
-    help_msg += ' DEFAULT : %(default)s'
-    arg_parser.add_argument('-x', '--nccomplevel', help=help_msg, default=3,
-                            type=int)
-    # Levels to extract:
-    help_msg = 'Levels to extract.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-l', '--levels', help=help_msg, default='all')
-    # Variables to extract:
-    help_msg = 'Variables to extract.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-v', '--variables', help=help_msg, default='all')
-    # Time steps to extract:
-    help_msg = 'Time steps to extract.'
-    help_msg += ' DEFAULT : "%(default)s"'
-    arg_parser.add_argument('-t', '--times', help=help_msg, default='all')
-    # Multiprocessing pool size:
-    help_msg = 'Number of processes to run simultaneously.'
-    help_msg += ' DEFAULT : %(default)s'
-    arg_parser.add_argument('-n', '--numprocs', help=help_msg, default=4,
-                            type=int)
-    # Parse arguments:
-    args = arg_parser.parse_args()
-    # Return program arguments:
-    return args
-
 def main():
     """
     Main function for extraction
@@ -640,7 +640,7 @@ def main():
     # Output file name pattern:
     out_file_pattern = args.outpattern
     # Enable NetCDF compression:
-    nc_compress = args.nccompress
+    nc_compress = args.nocompress
     # NetCDF compression level:
     nc_compress_level = args.nccomplevel
     # Requested levels:
