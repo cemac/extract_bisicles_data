@@ -1,0 +1,708 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+extract_bisicles_data
+
+Extract data from a set of BISICLES HDF5 output files and save as NetCDF.
+"""
+
+# stdlib imports:
+from __future__ import division
+from ctypes import c_int
+from multiprocessing import Manager, Pool
+import argparse
+import glob
+import os
+import re
+import sys
+import time
+# third party imports:
+import h5py as h5
+import netCDF4 as nc
+from amrfile import io as amr
+
+# Define pickling method in Python2, to avoid multiprocessing problems:
+# see:
+#    https://stackoverflow.com/questions/25156768/
+try:
+    import copy_reg
+    import types
+    def _pickle_method(m):
+        if m.im_self is None:
+            return getattr, (m.im_class, m.im_func.func_name)
+        return getattr, (m.im_self, m.im_func.func_name)
+    copy_reg.pickle(types.MethodType, _pickle_method)
+except:
+    pass
+
+def format_list(list_in, join_str=', '):
+    """
+    Format a list for printing
+    """
+    # Try to decode() the values ... :
+    try:
+        list_str = ['{0}'.format(i.decode()) for i in list_in]
+    # If values can't be decoded:
+    except AttributeError:
+        list_str = ['{0}'.format(i) for i in list_in]
+    # Join values woth 'join_str':
+    list_str = join_str.join(list_str)
+    # Return string of values:
+    return list_str
+
+def check_int(in_value):
+    """
+    Check if a value is integer, exit if not
+    """
+    try:
+        out_value = int(in_value)
+    except ValueError:
+        err_msg = '*** invalid argument (non integer value) : {0} ***\n\n'
+        err_msg = err_msg.format(in_value)
+        sys.stderr.write(err_msg)
+        sys.exit()
+    return out_value
+
+def arg_to_list(arg_in, in_type=None):
+    """
+    Convert comma separated argparser argument to list
+    """
+    # If argument is 'all', then leave it be:
+    if arg_in == 'all':
+        return arg_in
+    # If type is 'str', input should be commas separated strings:
+    if in_type == 'str':
+        arg_out = arg_in.split(',')
+        return arg_out
+    # Otherwise, we shold have a list integer type arguments. Init list for
+    # output:
+    arg_out = []
+    # Split inputs:
+    arg_list = arg_in.split(',')
+    # For each argument:
+    for arg in arg_list:
+        # Check for a '-' to specify range:
+        if re.match('[0-9]+-[0-9]+', arg):
+            # Split the range:
+            arg_rng = arg.split('-')
+            # Convert start / end to int:
+            rng_start = check_int(arg_rng[0])
+            rng_end = check_int(arg_rng[1]) + 1
+            # Range list:
+            rng = list(range(rng_start, rng_end))
+            # Add to args:
+            arg_out = arg_out + rng
+        # Check for a ':' to specify range:
+        elif re.match('[0-9]+:[0-9]+', arg):
+            # Split the range:
+            arg_rng = arg.split(':')
+            # If three values, then an increment value is specified:
+            if len(arg_rng) == 3:
+                rng_inc = check_int(arg_rng[1])
+                # End is third value:
+                rng_end = check_int(arg_rng[2]) + 1
+            # Else just use 1:
+            else:
+                rng_inc = 1
+                # End is second value:
+                rng_end = check_int(arg_rng[1]) + 1
+            # Convert start / end to int:
+            rng_start = check_int(arg_rng[0])
+            # Range list:
+            rng = list(range(rng_start, rng_end, rng_inc))
+            # Add to args:
+            arg_out = arg_out + rng
+        # Else, should just be an int:
+        else:
+            # Add to args:
+            arg_out.append(check_int(arg))
+    # Return list of arguments:
+    return arg_out
+
+class DataCollection(object):
+
+    """
+    A collection of BISICLES data files
+    """
+
+    def __init__(self, kwargs):
+        # Get the OS path separator and the Python version:
+        self.ps = os.path.sep
+        self.py_ver = sys.version_info[0]
+        # User inputs:
+        self.in_dir = kwargs['in_dir']
+        self.in_file_pattern = kwargs['in_file_pattern']
+        self.out_dir = kwargs['out_dir']
+        self.nc_compress = kwargs['nc_compress']
+        self.nc_compress_level = kwargs['nc_compress_level']
+        self.out_file_pattern = kwargs['out_file_pattern']
+        self.requested_levels = kwargs['requested_levels']
+        self.requested_variables = kwargs['requested_variables']
+        self.requested_times = kwargs['requested_times']
+        # Init variables for storing data information:
+        self.files = []
+        self.num_files = None
+        self.variables = []
+        self.num_variables = None
+        self.levels = {}
+        self.num_levels = None
+        self.times = {}
+        # Get the input file names:
+        self.get_filenames()
+        # If no files found, give up:
+        if not self.num_files:
+            err_msg = '*** no matching files found in "{0}". exiting ***\n\n'
+            sys.stderr.write(err_msg.format(self.in_dir))
+            sys.exit()
+        # Extract data information from files:
+        self.get_file_information()
+        # Sort the variable names:
+        self.variables.sort()
+        # Number of variables and levels:
+        self.num_variables = len(self.variables)
+        self.num_levels = len(self.levels)
+        # Loop through levels:
+        for level in self.levels:
+            # Sort the times, and store the number of time steps in the level:
+            self.levels[level]['times'].sort()
+            self.levels[level]['num_times'] = len(self.levels[level]['times'])
+        # Check the user requested values:
+        self.check_requested_data()
+
+    def get_filenames(self):
+        """
+        Get the names of the input files which match requested pattern
+        """
+        # Use glob to get the names of the files:
+        self.files = glob.glob(self.ps.join([self.in_dir,
+                                             self.in_file_pattern]))
+        # sort the files and sotre a file count:
+        self.files.sort()
+        self.num_files = len(self.files)
+
+    def get_file_information(self):
+        """
+        Extract data information by reading through the input files
+        """
+        # Init a file count:
+        file_count = 1
+        # Loop through the input files:
+        for in_file in self.files:
+            # Print a file count message:
+            file_msg = '\rreading file information : {0} of {1}'
+            sys.stdout.flush()
+            sys.stdout.write(file_msg.format(file_count, self.num_files))
+            sys.stdout.flush()
+            # Use h5py to open the input file:
+            h5_file = h5.File(in_file, 'r')
+            # Get the number of variables (components):
+            num_components = h5_file.attrs['num_components']
+            # For each variable:
+            for in_component in range(0, num_components):
+                # Get the meaningful variable name:
+                h5_component = 'component_{0}'.format(in_component)
+                if self.py_ver > 2:
+                    component_name = h5_file.attrs[h5_component].decode()
+                else:
+                    component_name = h5_file.attrs[h5_component]
+                # If this variable name has not yet been recorded:
+                if not component_name in self.variables:
+                    # Add to list of known variable names:
+                    self.variables.append(component_name)
+            # Get the number of levels in the file:
+            num_levels = h5_file.attrs['num_levels']
+            # For each level:
+            for in_level in range(0, num_levels):
+                h5_level = 'level_{0}'.format(in_level)
+                # If this level information has not been recorded:
+                if not in_level in self.levels:
+                    # Get the attributes for this level:
+                    h5_attrs = h5_file[h5_level].attrs
+                    self.levels[in_level] = {}
+                    level_attrs = self.levels[in_level]
+                    level_attrs['times'] = []
+                    level_attrs['dt'] = h5_attrs['dt']
+                    level_attrs['dx'] = h5_attrs['dx']
+                    level_attrs['prob_domain'] = h5_attrs['prob_domain']
+                # Get the times for the level:
+                level_times = self.levels[in_level]['times']
+                level_time = h5_file[h5_level].attrs['time']
+                # Record the time value if not yet recorded:
+                if not level_time in level_times:
+                    level_times.append(level_time)
+                if not level_time in self.times:
+                    self.times[level_time] = []
+                # Record the file name which contins this time value:
+                if not in_file in self.times[level_time]:
+                    self.times[level_time].append(in_file)
+            # Close the HDF5 file:
+            h5_file.close()
+            # Increment the file count:
+            file_count += 1
+        # Add a line space:
+        sys.stdout.write('\n\n')
+        sys.stdout.flush()
+
+    @staticmethod
+    def __check_requested_data(variable_name, requested_values,
+                               recorded_values):
+        """
+        Check requested values against values recorded from data files:
+        """
+        # Init a warning count:
+        warn_count = 0
+        # If all values requested:
+        if requested_values == 'all':
+            # Set requested values to recorded values:
+            requested_values = recorded_values
+        # Else, check the values:
+        else:
+            for value in requested_values:
+                # If the requested value was not found in data:
+                if not value in recorded_values:
+                    # Increment warning count and print a message:
+                    warn_count += 1
+                    warn_msg = '*** requested {0} {1} not found in data ***\n'
+                    sys.stderr.write(warn_msg.format(variable_name, value))
+                    # Remove the bad value from the requested values:
+                    requested_values = [i for i in requested_values if i in
+                                        recorded_values]
+        # Return the checked values and the warning count:
+        return requested_values, warn_count
+
+    def check_requested_data(self):
+        """
+        Check requested values against values recorded from the input data
+        """
+        # Get the recorded levels, variables and time values:
+        data_levels = list(self.levels.keys())
+        data_variables = self.variables
+        data_times = list(self.times.keys())
+        # Init a warning count:
+        warn_count = 0
+        # Check the requested levels:
+        vals, warns = self.__check_requested_data('level',
+                                                  self.requested_levels,
+                                                  data_levels)
+        self.requested_levels = vals
+        warn_count += warns
+        # Check the requested variables:
+        vals, warns = self.__check_requested_data('variable',
+                                                  self.requested_variables,
+                                                  data_variables)
+        self.requested_variables = vals
+        warn_count += warns
+        # Check the requested times:
+        vals, warns = self.__check_requested_data('time',
+                                                  self.requested_times,
+                                                  data_times)
+        self.requested_times = vals
+        warn_count += warns
+        # If warnings have been printed, add a line break:
+        if warn_count:
+            sys.stderr.write('\n')
+
+    def print_file_information(self):
+        """
+        Print information about the data
+        """
+        # Set output to stdout:
+        out = sys.stdout
+        # File information:
+        out.write('# {0} input files found:\n\n'.format(self.num_files))
+        out.write('  * file names : {0}\n\n'.format(format_list(self.files)))
+        # Variable information:
+        out.write('# {0} variables found:\n\n'.format(self.num_variables))
+        variables = format_list(self.variables)
+        out.write('  * variable names : {0}\n\n'.format(variables))
+        # Level information:
+        out.write('# {0} levels found:\n\n'.format(self.num_levels))
+        # Loop through the levels:
+        for level in self.levels:
+            # Print information for this level:
+            sys.stdout.write('## level {0}:\n\n'.format(level))
+            level_dt = self.levels[level]['dt']
+            sys.stdout.write('  * dt: {0}\n'.format(level_dt))
+            level_dx = self.levels[level]['dx']
+            sys.stdout.write('  * dx: {0}\n'.format(level_dx))
+            level_pd = self.levels[level]['prob_domain']
+            pd = format_list(level_pd)
+            sys.stdout.write('  * prob domain: {0}\n'.format(pd))
+            num_times = self.levels[level]['num_times']
+            sys.stdout.write('  * time steps: {0}\n'.format(num_times))
+            level_times = self.levels[level]['times']
+            times = format_list(level_times)
+            sys.stdout.write('  * time values: {0}\n\n'.format(times))
+
+    def get_data(self, variables=None, levels=None, times=None):
+        """
+        Get requested data from BISICLES HDF5 files and return a dict of
+        values
+        """
+        # If any variables requested, use those, otherwise get all:
+        if variables:
+            in_vars = variables
+        else:
+            in_vars = self.variables
+        # If any levels requested, use those, otherwise get all:
+        if levels:
+            in_levels = levels
+        else:
+            in_levels = self.levels
+        # If any times requested, use those, otherwise get all:
+        if times:
+            in_times = {}
+            for in_time in times:
+                in_times[in_time] = self.times[in_time]
+        else:
+            in_times = self.times
+        # Init a list of files to be read:
+        in_files = []
+        # For each requested time step, add the files for that step to list of
+        # files to be read:
+        for in_time in in_times:
+            in_files = in_files + in_times[in_time]
+        # Create a list of unique file names:
+        in_files = list(set(in_files))
+        # Init data dict for output:
+        data = {
+            'levels': {},
+            'times': []
+        }
+        # For each requested time:
+        for in_time in in_times:
+            # Add time to output dict:
+            data['times'].append(in_time)
+            # There should only be one file per time step ...
+            # Get the file name for this time step:
+            in_file = in_times[in_time][0]
+            # Open the data file with libamr:
+            amrid = amr.load(in_file)
+            # Loop through requested levels:
+            for in_level in in_levels:
+                # If this level has not yet been added to output dict, add it:
+                if not in_level in data['levels']:
+                    data['levels'][in_level] = {}
+                # Data for this level:
+                data_level = data['levels'][in_level]
+                # Get the dimensions of the data at this level:
+                lo, hi = amr.queryDomainCorners(amrid, in_level)
+                # Loop through requested variables:
+                for in_var in in_vars:
+                    # Get x, y and variable data values:
+                    x, y, z = amr.readBox2D(amrid, in_level, lo, hi, in_var)
+                    # If x values for this level not yet reorded, do it now:
+                    if not 'x' in data_level:
+                        data_level['x'] = x
+                    # If y values for this level not yet reorded, do it now:
+                    if not 'y' in data_level:
+                        data_level['y'] = y
+                    # If dt value for this level not yet reorded, do it now:
+                    if not 'dt' in data_level:
+                        data_level['dt'] = self.levels[in_level]['dt']
+                    # If dx value for this level not yet reorded, do it now:
+                    if not 'dx' in data_level:
+                        data_level['dx'] = self.levels[in_level]['dx']
+                    # If this variable has not yet been added to output dict:
+                    if not in_var in data_level:
+                        data_level[in_var] = {}
+                    # Add the variable data for the time step:
+                    data_level[in_var][in_time] = z
+            # Release the file:
+            amr.free(amrid)
+        # Return the data:
+        return data
+
+    def __mp_extract_data(self, options):
+        """
+        Multiprocessing worker function to extract data and write to NetCDF
+        """
+        # Get the input options:
+        opt_variable = options['variable']
+        opt_level = options['level']
+        opt_time = options['time']
+        lock = options['lock']
+        # Total number of option combinations to be processed and current
+        # pogress count values, handled by multiprocessing manager:
+        options_len = options['options_len']
+        options_count = options['options_count']
+        # Increment progress count:
+        options_count.value += 1
+        # Get current completion percentage:
+        percent_complete = (options_count.value / options_len.value) * 100
+        # Display progress:
+        file_msg = '\rextracting and writing data : {0:.02f} %'
+        sys.stdout.flush()
+        sys.stdout.write(file_msg.format(percent_complete))
+        sys.stdout.flush()
+        # Get the times at this level:
+        times = self.requested_times
+        num_times = len(times)
+        # Get the data for this option compination:
+        data = self.get_data([opt_variable], [opt_level], [opt_time])
+        level_data = data['levels'][opt_level]
+        # Strings for NetCDF variable names:
+        time_str = 'time'
+        x_str = 'x'
+        y_str = 'y'
+        # Output file name:
+        out_filename = '{0}{1}{2}_level{3}.nc'
+        out_file = out_filename.format(self.out_dir, self.ps,
+                                       self.out_file_pattern, opt_level)
+        # Acquire a lock for output file writing:
+        lock.acquire()
+        # If the file does not exist:
+        if not os.path.exists(out_file):
+            # Create the file:
+            nc_data = nc.Dataset(out_file, 'w', format='NETCDF4')
+            # Add time dimension and values:
+            nc_time = nc_data.createDimension(time_str, num_times)
+            nc_times = nc_data.createVariable(time_str, 'f', (time_str))
+            nc_times[:] = times
+            # Add level information:
+            nc_data.level = opt_level
+            # Add dt and dx informaiton for the level:
+            nc_data.dt = level_data['dt']
+            nc_data.dx = level_data['dx']
+            # Add x dimension and values:
+            level_x = level_data['x']
+            nc_x = nc_data.createDimension(x_str, len(level_x))
+            nc_xs = nc_data.createVariable(x_str, 'f', x_str)
+            nc_xs[:] = level_x
+            # Add y dimension and values:
+            level_y = level_data['y']
+            nc_y = nc_data.createDimension(y_str, len(level_y))
+            nc_ys = nc_data.createVariable(y_str, 'f', y_str)
+            nc_ys[:] = level_y
+        else:
+            # Open output file for appending:
+            nc_data = nc.Dataset(out_file, 'a', format='NETCDF4')
+        # Variable name:
+        var_str = '{0}'.format(opt_variable)
+        # Some BISICLES variable name may contain slashes ... replace!:
+        var_str = re.sub('/', '_', var_str)
+        # If this variable does not yet exist in output file:
+        if not var_str in list(nc_data.variables.keys()):
+            # Create the variable:
+            nc_var = nc_data.createVariable(var_str, 'f',
+                                            (time_str, x_str, y_str),
+                                            zlib=self.nc_compress,
+                                            complevel=self.nc_compress_level)
+        # Else get the variable informaiton from the output file:
+        else:
+            nc_var = nc_data.variables[var_str]
+        # For each time step at this level:
+        for i in enumerate(times):
+            time_index = i[0]
+            time_value = i[1]
+            # If this is the correct time step:
+            if time_value == opt_time:
+                # Add the data for this variable at this time step:
+                nc_var[time_index] = level_data[opt_variable][time_value]
+        # Close the output file and release the multiprocessing lock:
+        nc_data.close()
+        lock.release()
+
+    def mp_extract_data(self, options):
+        """
+        Multiprocess extraction wrapper function for exception catching
+        """
+        try:
+            self.__mp_extract_data(options)
+        except Exception as e:
+            sys.stderr.write('{0}: {1}\n'.format(type(e).__name__, e))
+
+    def extract_data(self, pool_size=8):
+        """
+        Extract data fro mthe BISICLES archive using a multiprocessing Pool
+        """
+        # Create the multiprocessing manager:
+        mp_manager = Manager()
+        # Add count of option combinations and progress counter values to
+        # the multiprocessing manager:
+        options_count = mp_manager.Value(c_int, 0)
+        options_len = mp_manager.Value(c_int, 0)
+        # Init a loist for the option combinations:
+        mp_options = []
+        # Loop through the requested levels:
+        for level in self.requested_levels:
+            # Create a lock for this level, to control access to the output
+            # file for writing:
+            mp_lock = mp_manager.Lock()
+            # Get the data for this level:
+            level_data = self.levels[level]
+            # For each requested variable:
+            for variable in self.requested_variables:
+                # For eahc requested time:
+                for level_time in self.requested_times:
+                    # Check the requested time exists in this level:
+                    if level_time in level_data['times']:
+                        # Options for this combination:
+                        options = {
+                            'level': level,
+                            'variable': variable,
+                            'time': level_time,
+                            'options_count': options_count,
+                            'options_len': options_len,
+                            'lock': mp_lock
+                        }
+                        # Add to list of options:
+                        mp_options.append(options)
+        # Set the count of option combinations:
+        options_len.value = len(mp_options)
+        # Create the multiprocessing pool:
+        mp_pool = Pool(pool_size)
+        # Use map_async to extract the data:
+        mp_pool.map_async(self.mp_extract_data, mp_options)
+        mp_pool.close()
+        mp_pool.join()
+        # Add a line break after extraction:
+        sys.stdout.write('\n\n')
+        sys.stdout.flush()
+
+def get_args():
+    """
+    Get program arguments
+    """
+    # Create argument parser:
+    arg_parser = argparse.ArgumentParser()
+    # Input data directory:
+    help_msg = 'Input data directory.'
+    arg_parser.add_argument('-i', '--indir', help=help_msg, default=None,
+                            required=True)
+    # Query data information:
+    help_msg = 'Query and print data information (no extraction).'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-q', '--query', help=help_msg,
+                            action='store_true')
+    # Input file pattern to match:
+    help_msg = 'Input file pattern to match.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-p', '--inpattern', help=help_msg,
+                            default='*.hdf5')
+    # Output directory:
+    help_msg = 'Output data directory.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-d', '--outdir', help=help_msg, default='.')
+    # Output file pattern / base name:
+    help_msg = 'Output file name pattern / basename.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-o', '--outpattern', help=help_msg, default='out')
+    # Enable NetCDF compression:
+    help_msg = 'Disable NetCDF compression.'
+    help_msg += ' DEFAULT : False'
+    arg_parser.add_argument('-z', '--nccompress', help=help_msg,
+                            action='store_false')
+    # NetCDF compression level:
+    help_msg = 'NetCDF compression level.'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-x', '--nccomplevel', help=help_msg, default=3,
+                            type=int)
+    # Levels to extract:
+    help_msg = 'Levels to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-l', '--levels', help=help_msg, default='all')
+    # Variables to extract:
+    help_msg = 'Variables to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-v', '--variables', help=help_msg, default='all')
+    # Time steps to extract:
+    help_msg = 'Time steps to extract.'
+    help_msg += ' DEFAULT : "%(default)s"'
+    arg_parser.add_argument('-t', '--times', help=help_msg, default='all')
+    # Multiprocessing pool size:
+    help_msg = 'Number of processes to run simultaneously.'
+    help_msg += ' DEFAULT : %(default)s'
+    arg_parser.add_argument('-n', '--numprocs', help=help_msg, default=4,
+                            type=int)
+    # Parse arguments:
+    args = arg_parser.parse_args()
+    # Return program arguments:
+    return args
+
+def main():
+    """
+    Main function for extraction
+    """
+    # Get a start time value:
+    start_time = time.time()
+    # Get program arguments:
+    args = get_args()
+    # Input data directory:
+    in_dir = args.indir
+    # Input file patter:
+    in_file_pattern = args.inpattern
+    # Whether to just query the data:
+    query_data = args.query
+    # Output directory:
+    out_dir = args.outdir
+    # Output file name pattern:
+    out_file_pattern = args.outpattern
+    # Enable NetCDF compression:
+    nc_compress = args.nccompress
+    # NetCDF compression level:
+    nc_compress_level = args.nccomplevel
+    # Requested levels:
+    requested_levels = arg_to_list(args.levels)
+    # Requested variables:
+    requested_variables = arg_to_list(args.variables, 'str')
+    # Requested times:
+    requested_times = arg_to_list(args.times)
+    # Number of processes to run:
+    pool_size = args.numprocs
+    # Keyword arguments for DataCollection initialisation:
+    kwargs = {
+        'in_dir': in_dir,
+        'in_file_pattern': in_file_pattern,
+        'out_dir': out_dir,
+        'out_file_pattern': out_file_pattern,
+        'nc_compress': nc_compress,
+        'nc_compress_level': nc_compress_level,
+        'requested_levels': requested_levels,
+        'requested_variables': requested_variables,
+        'requested_times': requested_times
+    }
+    # Create the collection:
+    data = DataCollection(kwargs)
+    # If querying data:
+    if query_data:
+        # Print information about the BISICLES data:
+        data.print_file_information()
+    # Else extracting:
+    else:
+        # Check for existing output files:
+        out_files = []
+        for level in data.requested_levels:
+            out_file_glob = '{0}{1}{2}_level{3}.nc'
+            out_file_glob = out_file_glob.format(data.out_dir, data.ps,
+                                                 data.out_file_pattern, level)
+            out_files = out_files + glob.glob(out_file_glob)
+        if out_files:
+            err_msg = '*** existing output files found : {0}. exiting ***\n\n'
+            err_msg = err_msg.format(format_list(out_files))
+            sys.stderr.write(err_msg)
+        # Check requested values are all > 0:
+        elif not data.requested_levels:
+            err_msg = '*** no valid levels. exiting ***\n\n'
+            sys.stderr.write(err_msg)
+        elif not data.requested_variables:
+            err_msg = '*** no valid variables. exiting ***\n\n'
+            sys.stderr.write(err_msg)
+        elif not data.requested_times:
+            err_msg = '*** no valid times. exiting ***\n\n'
+            sys.stderr.write(err_msg)
+        else:
+            # Extract the data and write to NetCDF:
+            data.extract_data(pool_size=pool_size)
+    # Get the current time for elapsed time calculation and display:
+    elapsed_time = time.time() - start_time
+    time_msg = 'elapsed time : {0:.02f} seconds\n\n'
+    sys.stdout.write(time_msg.format(elapsed_time))
+    # libamrfile always displays a memory usage message, which is not the same
+    # as the amount of memory used by the Python process. This may help
+    # explain the message:
+    sys.stdout.write('## libamrfile memory usage report:\n\n  ')
+
+if __name__ == '__main__':
+    main()
