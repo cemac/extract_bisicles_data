@@ -10,9 +10,9 @@ The program should work with Python2 or Python3 (it has been tested with Python
 2.6, 2.7, various versions of Python3 and all seems well), and has the
 following third party requirements:
 
-  * h5py
-  * netcdf4
-  * amrfile
+  * [h5py](https://www.h5py.org/)
+  * [netCDF4](https://github.com/Unidata/netcdf4-python)
+  * [amrfile](http://davis.lbl.gov/Manuals/BISICLES-DOCS/libamrfile.html#python)
 
 The amrfile Python code is provided with BISICLES, and requires a compiled
 library. More information:
