@@ -546,7 +546,7 @@ class DataCollection(object):
         if not var_str in list(nc_data.variables.keys()):
             # Create the variable:
             nc_var = nc_data.createVariable(var_str, 'f',
-                                            (time_str, x_str, y_str),
+                                            (time_str, y_str, x_str),
                                             zlib=self.nc_compress,
                                             complevel=self.nc_compress_level)
         # Else get the variable informaiton from the output file:
