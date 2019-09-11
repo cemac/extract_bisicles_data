@@ -568,10 +568,11 @@ class DataCollection(object):
         """
         Multiprocess extraction wrapper function for exception catching
         """
+        # Try to catch KeyboardInterrupt:
         try:
             self.__mp_extract_data(options)
-        except Exception as e:
-            sys.stderr.write('{0}: {1}\n'.format(type(e).__name__, e))
+        except KeyboardInterrupt:
+            pass
 
     def extract_data(self, pool_size=8):
         """
@@ -614,9 +615,20 @@ class DataCollection(object):
         # Create the multiprocessing pool:
         mp_pool = Pool(pool_size)
         # Use map_async to extract the data:
-        mp_pool.map_async(self.mp_extract_data, mp_options)
-        mp_pool.close()
-        mp_pool.join()
+        mp_result = mp_pool.map_async(self.mp_extract_data, mp_options)
+        # Try to exit cleanly on KeyboardInterrupt:
+        try:
+            mp_result.get()
+            mp_pool.close()
+            mp_pool.join()
+        except KeyboardInterrupt:
+            try:
+                mp_pool.terminate()
+                mp_pool.join()
+            except:
+                pass
+            sys.stdout.write('\n')
+            sys.exit()
         # Add a line break after extraction:
         sys.stdout.write('\n\n')
         sys.stdout.flush()
@@ -705,4 +717,9 @@ def main():
     sys.stdout.write('## libamrfile memory usage report:\n\n  ')
 
 if __name__ == '__main__':
-    main()
+    # Try to catch KeyboardInterrupt:
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.stdout.write('\n')
+        sys.exit()
