@@ -517,7 +517,7 @@ class DataCollection(object):
             # Create the file:
             nc_data = nc.Dataset(out_file, 'w', format='NETCDF4')
             # Add time dimension and values:
-            nc_time = nc_data.createDimension(time_str, num_times)
+            nc_time = nc_data.createDimension(time_str)
             nc_times = nc_data.createVariable(time_str, 'f', (time_str))
             nc_times[:] = times
             # Add level information:
