@@ -237,7 +237,7 @@ class DataCollection(object):
         # Use glob to get the names of the files:
         self.files = glob.glob(self.ps.join([self.in_dir,
                                              self.in_file_pattern]))
-        # sort the files and sotre a file count:
+        # sort the files and store a file count:
         self.files.sort()
         self.num_files = len(self.files)
 
@@ -358,6 +358,7 @@ class DataCollection(object):
                                                   self.requested_times,
                                                   data_times)
         self.requested_times = vals
+        self.requested_times.sort()
         warn_count += warns
         # If warnings have been printed, add a line break:
         if warn_count:
@@ -549,7 +550,7 @@ class DataCollection(object):
                                             (time_str, y_str, x_str),
                                             zlib=self.nc_compress,
                                             complevel=self.nc_compress_level)
-        # Else get the variable informaiton from the output file:
+        # Else get the variable information from the output file:
         else:
             nc_var = nc_data.variables[var_str]
         # For each time step at this level:
@@ -595,7 +596,7 @@ class DataCollection(object):
             level_data = self.levels[level]
             # For each requested variable:
             for variable in self.requested_variables:
-                # For eahc requested time:
+                # For each requested time:
                 for level_time in self.requested_times:
                     # Check the requested time exists in this level:
                     if level_time in level_data['times']:
