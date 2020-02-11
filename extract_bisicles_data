@@ -20,6 +20,7 @@ import time
 # third party imports:
 import h5py as h5
 import netCDF4 as nc
+import numpy as np
 from amrfile import io as amr
 
 # Define pickling method in Python2, to avoid multiprocessing problems:
@@ -538,7 +539,7 @@ class DataCollection(object):
             nc_ys[:] = level_y
         else:
             # Open output file for appending:
-            nc_data = nc.Dataset(out_file, 'a', format='NETCDF4')
+            nc_data = nc.Dataset(out_file, 'a')
         # Variable name:
         var_str = '{0}'.format(opt_variable)
         # Some BISICLES variable name may contain slashes ... replace!:
@@ -634,6 +635,47 @@ class DataCollection(object):
         sys.stdout.write('\n\n')
         sys.stdout.flush()
 
+    def add_velocity_magnitude(self):
+        """
+        Add velocity magnitude variable to outputf files, if xVel, yVel, and
+        zVel variables are being extracted
+        """
+        # If variables have been requested:
+        if ('xVel' in self.requested_variables and
+                'yVel' in self.requested_variables and
+                'zVel' in self.requested_variables):
+            # Get requested levels:
+            req_levels = list(self.levels.keys())
+            # For each level:
+            for req_level in req_levels:
+                # Construct file name and path:
+                out_fn = '{0}{1}{2}_level{3}.nc'
+                out_fp = out_fn.format(self.out_dir, self.ps,
+                                       self.out_file_pattern, req_level)
+                # If the output file exists:
+                if os.path.exists(out_fp):
+                    # Open output file for appending:
+                    nc_data = nc.Dataset(out_fp, 'a')
+                    # Get velocity values:
+                    x_vel = nc_data.variables['xVel'][:]
+                    y_vel = nc_data.variables['yVel'][:]
+                    z_vel = nc_data.variables['zVel'][:]
+                    # Calculate velocity magnitude:
+                    vel_mag = np.sqrt((np.power(x_vel, 2)) +
+                                      (np.power(y_vel, 2)) +
+                                      (np.power(z_vel, 2)))
+                    # Dimensions should be same as existing vel variables:
+                    vel_dim = nc_data.variables['xVel'].dimensions
+                    # Create the variable:
+                    nc_var = nc_data.createVariable('velocity_magnitude', 'f',
+                                                    vel_dim,
+                                                    zlib=self.nc_compress,
+                                                    complevel=self.nc_compress_level)
+                    # Add the data for this variable:
+                    nc_var[:] = vel_mag
+                    # Close the NetCDF file:
+                    nc_data.close()
+
 def main():
     """
     Main function for extraction
@@ -708,6 +750,8 @@ def main():
         else:
             # Extract the data and write to NetCDF:
             data.extract_data(pool_size=pool_size)
+            # Add velocity magnitude if possible:
+            data.add_velocity_magnitude()
     # Get the current time for elapsed time calculation and display:
     elapsed_time = time.time() - start_time
     time_msg = 'elapsed time : {0:.02f} seconds\n\n'

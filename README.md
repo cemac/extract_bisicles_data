@@ -12,6 +12,7 @@ following third party requirements:
 
   * [h5py](https://www.h5py.org/)
   * [netCDF4](https://github.com/Unidata/netcdf4-python)
+  * [numpy](https://numpy.org/)
   * [amrfile](http://davis.lbl.gov/Manuals/BISICLES-DOCS/libamrfile.html#python)
 
 The amrfile Python code is provided with BISICLES, and requires a compiled
@@ -133,3 +134,11 @@ than the number of output files which will be created (which will equal the
 number of levels to be extracted) may not provide a huge improvement in
 performance. The number of processes to run can be specified with the `-n` or
 `--numprocs` option. The default value is 4.
+
+## Velocity Magnitude
+
+If the xVel, yVel, and zVel variables are all requested, then the velocity magnitude will also be calculated and added to the output NetCDF file.
+
+The velocity magnitude is calculated using the method:
+
+![velocity magnitude formula](velocity_magnitude.png "velocity magnitude formula")
