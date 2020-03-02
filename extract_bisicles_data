@@ -645,7 +645,7 @@ class DataCollection(object):
                 'yVel' in self.requested_variables and
                 'zVel' in self.requested_variables):
             # Get requested levels:
-            req_levels = list(self.levels.keys())
+            req_levels = self.requested_levels
             # For each level:
             for req_level in req_levels:
                 # Construct file name and path:
