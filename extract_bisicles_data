@@ -135,7 +135,7 @@ def get_args():
     help_msg = 'Input file pattern to match.'
     help_msg += ' DEFAULT : "%(default)s"'
     arg_parser.add_argument('-p', '--inpattern', help=help_msg,
-                            default='*.hdf5')
+                            default='plot*.hdf5')
     # Query data information:
     help_msg = 'Query and print data information (no extraction).'
     help_msg += ' DEFAULT : %(default)s'
