@@ -41,7 +41,7 @@ extract_bisicles_data -i /path/to/bisicles/data
 ### Input File Pattern
 
 The input filename pattern to match can be specified with the `-p` or
-`--inpattern` option. The default value is `*.hdf5`, and the Python `glob`
+`--inpattern` option. The default value is `plot*.hdf5`, and the Python `glob`
 library uses this pattern to match the input files which should be read.
 
 ### Query Data
