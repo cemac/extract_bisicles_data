@@ -20,6 +20,11 @@ library. More information:
 
 [http://davis.lbl.gov/Manuals/BISICLES-DOCS/libamrfile.html](http://davis.lbl.gov/Manuals/BISICLES-DOCS/libamrfile.html)
 
+There is a copy of the required amrfile Python files available, including a
+'fairly portable' Linux version of the compiled library, available here:
+
+[https://github.com/cemac/libamrfile](https://github.com/cemac/libamrfile)
+
 ## Usage And Options
 
 To see the available program options and default values, use the `-h` option:
